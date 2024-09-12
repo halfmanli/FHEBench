@@ -23,7 +23,9 @@ class TaskGraph:
             assert self.g.nodes[idx_n]["is_input"]
             return self.g.nodes[idx_n]["is_ciph"]
 
-    def add_input(self, is_ciph: bool = True, l: Union[int, None] = None):
+    def add_input(
+        self, name: str = None, is_ciph: bool = True, l: Union[int, None] = None
+    ):
         """
         Add a ciphertext/plaintext of plaintext input node to the task graph.
         l: level of ciphertext
@@ -33,6 +35,7 @@ class TaskGraph:
         idx_n = len(self.g)
         self.g.add_node(
             idx_n,
+            name=name,
             is_op=False,
             is_input=True,
             is_ciph=is_ciph,
@@ -63,17 +66,27 @@ class TaskGraph:
         self.g.add_edge(idx_b, idx_n, map_od=1, l=l_a)  # map_od is 1 for right operand
         return idx_n
 
-    def HSub(self, idx_a, idx_b):
+    def PAdd(self, idx_a: int, idx_b: int):
+        assert self.get_is_ciph(idx_a) != self.get_is_ciph(idx_b)
+        idx_n = len(self.g)
+        l_a, l_b = self.g.nodes[idx_a]["l"], self.g.nodes[idx_b]["l"]
+        l = max(l_a, l_b)
+        self.g.add_node(idx_n, is_op=True, op="PAdd", l=l)
+        self.g.add_edge(idx_a, idx_n, map_od=0, l=l)  # map_od is 0 for left operand
+        self.g.add_edge(idx_b, idx_n, map_od=1, l=l)  # map_od is 1 for right operand
+        return idx_n
+
+    def HSub(self, idx_a: int, idx_b: int):
         assert self.get_is_ciph(idx_a) and self.get_is_ciph(idx_b)
         idx_n = len(self.g)
         l_a, l_b = self.g.nodes[idx_a]["l"], self.g.nodes[idx_b]["l"]
         assert l_a == l_b
         self.g.add_node(idx_n, is_op=True, op="HSub", l=l_a)
         self.g.add_edge(idx_a, idx_n, map_od=0, l=l_a)
-        self.g.add_edge(idx_b, idx_n, map_od=1, l=self.get_l(idx_b))
+        self.g.add_edge(idx_b, idx_n, map_od=1, l=l_b)
         return idx_n
 
-    def HMult(self, idx_a, idx_b):
+    def HMult(self, idx_a: int, idx_b: int):
         assert self.get_is_ciph(idx_a) and self.get_is_ciph(idx_b)
         idx_n = len(self.g)
         l_a, l_b = self.g.nodes[idx_a]["l"], self.g.nodes[idx_b]["l"]
@@ -83,7 +96,49 @@ class TaskGraph:
         self.g.add_edge(idx_b, idx_n, map_od=1, l=l_b)
         return idx_n
 
-    def PMult(self, idx_a, idx_b):
+    def HMult_RedErr(self, idx_a: int, idx_b: int):
+        """
+        If idx_a and idx_b have different levels, reduce the level of the higher one.
+        """
+        assert self.get_is_ciph(idx_a) and self.get_is_ciph(idx_b)
+        l_a, l_b = self.g.nodes[idx_a]["l"], self.g.nodes[idx_b]["l"]
+        if l_a < l_b:
+            idx_a, idx_b = idx_b, idx_a
+            l_a, l_b = l_b, l_a
+        for _ in range(0, l_a - l_b):
+            idx_a = self.Rescale(idx_a=idx_a)
+        idx_n = self.HMult(idx_a=idx_a, idx_b=idx_b)
+        return idx_n
+
+    def HSub_RedErr(self, idx_a: int, idx_b: int):
+        """
+        If idx_a and idx_b have different levels, reduce the level of the higher one.
+        """
+        assert self.get_is_ciph(idx_a) and self.get_is_ciph(idx_b)
+        l_a, l_b = self.g.nodes[idx_a]["l"], self.g.nodes[idx_b]["l"]
+        if l_a < l_b:
+            idx_a, idx_b = idx_b, idx_a
+            l_a, l_b = l_b, l_a
+        for _ in range(0, l_a - l_b):
+            idx_a = self.Rescale(idx_a=idx_a)
+        idx_n = self.HSub(idx_a=idx_a, idx_b=idx_b)
+        return idx_n
+
+    def HAdd_RedErr(self, idx_a: int, idx_b: int):
+        """
+        If idx_a and idx_b have different levels, reduce the level of the higher one.
+        """
+        assert self.get_is_ciph(idx_a) and self.get_is_ciph(idx_b)
+        l_a, l_b = self.g.nodes[idx_a]["l"], self.g.nodes[idx_b]["l"]
+        if l_a < l_b:
+            idx_a, idx_b = idx_b, idx_a
+            l_a, l_b = l_b, l_a
+        for _ in range(0, l_a - l_b):
+            idx_a = self.Rescale(idx_a=idx_a)
+        idx_n = self.HAdd(idx_a=idx_a, idx_b=idx_b)
+        return idx_n
+
+    def PMult(self, idx_a: int, idx_b: int):
         """
         Ciphertext-Plaintext multiplication.
         """
@@ -104,12 +159,20 @@ class TaskGraph:
         self.g.add_edge(idx_a, idx_n, map_od=0, l=l)
         return idx_n
 
-    def ModRaise(self, idx_a: int):
+    def ModRaise(self, idx_a: int, l_new: int):
         assert self.get_is_ciph(idx_a)
         idx_n = len(self.g)
         l = self.g.nodes[idx_a]["l"]
-        self.g.add_node(idx_n, is_op=True, op="ModRaise", l=l + self.K + 1)  # TODO:
-        self.g.add_edge(idx_a, idx_n, map_od=0, l=l + self.K + 1)
+        self.g.add_node(idx_n, is_op=True, op="ModRaise", l=l_new)  # TODO:
+        self.g.add_edge(idx_a, idx_n, map_od=0, l=l)
+        return idx_n
+
+    def Rescale(self, idx_a: int):
+        assert self.get_is_ciph(idx_a)
+        idx_n = len(self.g)
+        l = self.g.nodes[idx_a]["l"]
+        self.g.add_node(idx_n, is_op=True, op="Rescale", l=l - 1)
+        self.g.add_edge(idx_a, idx_n, map_od=0, l=l)
         return idx_n
 
     def Conjugate(self, idx_a):
@@ -119,7 +182,7 @@ class TaskGraph:
         self.g.add_node(idx_n, is_op=True, op="Conjugate", l=l)
         self.g.add_edge(idx_a, idx_n, map_od=0, l=l)
         return idx_n
-    
+
     def HAdd_BinTree(self, indices: List[int]):
         """
         Generate a binary tree of HAdd operations.
@@ -162,13 +225,63 @@ class TaskGraph:
                 raise ValueError(
                     "The level of the edge {}->{} is negative.".format(u, v)
                 )
-    
+        # check the unused operation
+        for idx_n in self.g.nodes():
+            if self.g.nodes[idx_n]["is_op"] and not self.g.out_degree(idx_n):
+                raise ValueError(
+                    "The result of operation {} is not used.".format(idx_n)
+                )
+        # check the unused input data
+        for idx_n in self.g.nodes():
+            if (
+                not self.g.nodes[idx_n]["is_op"]
+                and self.g.nodes[idx_n]["is_input"]
+                and not self.g.out_degree(idx_n)
+            ):
+                raise ValueError("The input data {} is not used.".format(idx_n))
+
+    def get_num_op(self, op: str):
+        """
+        Return the number of operations in the task graph.
+        """
+        return len(
+            [
+                idx_n
+                for idx_n, attr_n in self.g.nodes(data=True)
+                if attr_n["is_op"] and attr_n["op"] == op
+            ]
+        )
+
     def summarize(self):
         """
         Print statistical data.
         """
-        print("Number of operations: {}".format())
-        print("Number of homomorphic rotations: {}".format())
+        print(
+            "Number of operations: {}".format(
+                len(
+                    [
+                        idx_n
+                        for idx_n, attr_n in self.g.nodes(data=True)
+                        if attr_n["is_op"]
+                    ]
+                )
+            )
+        )
+        print("Number of HRotate: {}".format(self.get_num_op(op="HRotate")))
+        print(
+            "Number of unique rotation keys: {}".format(
+                sorted(
+                    list(
+                        [
+                            attr_n["pos_rot"]
+                            for _, attr_n in self.g.nodes(data=True)
+                            if attr_n["is_op"] and attr_n["op"] == "HRotate"
+                        ]
+                    )
+                )
+            )
+        )
+        print("Number of HMult: {}".format(self.get_num_op(op="HMult")))
 
     def visualize(self, dir_pdf: str):
         """
@@ -208,7 +321,7 @@ def example():
     D = tg.PMult(C, B)
     E = tg.HAdd(D, D)
     tg.add_output(E)
-    tg.visualize(os.path.dirname(__file__))
+    tg.visualize(os.path.dirname("/tmp"))
     tg.check()
 
 
